@@ -9,6 +9,7 @@ import 'package:geolocator_android/geolocator_android.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +52,7 @@ class _RidePageState extends State<RidePage> {
   DateTime? previousFixTime;
   DateTime? lastBackupAt;
   bool finishing = false;
+  bool keepScreenOn = false;
   DateTime? lastResumeAt;
   DateTime? pausedAt;
   Duration pausedDuration = Duration.zero;
@@ -60,7 +62,25 @@ class _RidePageState extends State<RidePage> {
   List<Map<String, dynamic>> rides = [];
 
   @override
-  void initState() { super.initState(); loadRides(); recoverInterruptedRide(); }
+  void initState() { super.initState(); loadRides(); recoverInterruptedRide(); restoreScreenPreference(); }
+
+  Future<void> restoreScreenPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool('keep_screen_on') ?? false;
+    await WakelockPlus.toggle(enable: enabled);
+    if (mounted) setState(() => keepScreenOn = enabled);
+  }
+
+  Future<void> toggleScreenOn(bool enabled) async {
+    try {
+      await WakelockPlus.toggle(enable: enabled);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('keep_screen_on', enabled);
+      if (mounted) setState(() => keepScreenOn = enabled);
+    } catch (e) {
+      if (mounted) setState(() => status = 'Gagal mengatur layar: $e');
+    }
+  }
 
   Future<void> loadRides() async {
     final p = await SharedPreferences.getInstance();
@@ -181,6 +201,22 @@ class _RidePageState extends State<RidePage> {
     unawaited(saveDraft());
   }
 
+  Future<void> confirmFinishRide() async {
+    if (finishing) return;
+    final shouldFinish = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Akhiri perjalanan?'),
+        content: const Text('Perjalanan akan disimpan ke riwayat. Pastikan kamu sudah berhenti dengan aman.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('BATAL')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('SIMPAN')),
+        ],
+      ),
+    );
+    if (shouldFinish == true && mounted) await finishRide();
+  }
+
   Future<void> finishRide() async {
     if (!recording || finishing) return;
     setState(() => finishing = true);
@@ -206,7 +242,7 @@ class _RidePageState extends State<RidePage> {
   }
 
   @override
-  void dispose() { gps?.cancel(); timer?.cancel(); super.dispose(); }
+  void dispose() { gps?.cancel(); timer?.cancel(); WakelockPlus.disable(); super.dispose(); }
 
   String get duration {
     final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60, s = seconds % 60;
@@ -279,7 +315,7 @@ class _RidePageState extends State<RidePage> {
       )),
       const SizedBox(width:10),
       Expanded(child:FilledButton.icon(
-        onPressed:finishing ? null : finishRide,
+        onPressed:finishing ? null : confirmFinishRide,
         icon:const Icon(Icons.stop),label:const Text('SELESAI'),
         style:FilledButton.styleFrom(backgroundColor:green,foregroundColor:Colors.black),
       )),
@@ -294,6 +330,15 @@ class _RidePageState extends State<RidePage> {
 
   Widget dashboard() => ListView(padding:const EdgeInsets.all(16),children:[
     Text(status,style:const TextStyle(color:green,fontSize:12)),
+    SwitchListTile.adaptive(
+      dense:true,
+      contentPadding:EdgeInsets.zero,
+      value:keepScreenOn,
+      onChanged:toggleScreenOn,
+      title:const Text('Mode Holder Sepeda',style:TextStyle(fontWeight:FontWeight.w700,fontSize:14)),
+      subtitle:const Text('Layar tetap menyala saat dipasang di holder. Gunakan seperlunya untuk menghemat baterai.',style:TextStyle(fontSize:11)),
+      secondary:const Icon(Icons.screen_lock_portrait,color:green),
+    ),
     const SizedBox(height:12),
     Container(
       padding:const EdgeInsets.all(22),
