@@ -13,6 +13,7 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   supabase_flutter: ^2.8.4
+  wakelock_plus: ^1.2.8
 dev_dependencies:
   flutter_test:
     sdk: flutter
