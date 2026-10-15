@@ -57,3 +57,10 @@ GitHub Actions kini hanya berjalan **manual**, melalui **Actions → Build Andro
 - Perjalanan lama dan baru belum disinkronkan ke cloud. Backup perangkat bukan jaminan jika aplikasi di-force stop, penyimpanan dihapus, atau sistem mematikan layanan.
 - Ketika background service aktif, notifikasi harus tetap terlihat. Buka pengaturan aplikasi Android untuk mengizinkan Lokasi Presisi dan tidak membatasi baterai.
 - Uji khusus: perjalanan 30 menit, layar terkunci >=20 menit, cek rute GPS dan elapsed time setelah selesai. Jangan mengandalkan aplikasi untuk perjalanan utama sebelum lulus uji.
+
+## Fitur baru: GPS signal dan ekspor GPX
+- Dashboard menampilkan perkiraan akurasi GPS dalam meter, untuk membantu mendeteksi sinyal yang lemah.
+- Pada tab Riwayat, tekan ikon bagikan untuk mengekspor rute perjalanan berformat GPX 1.1 (posisi, waktu, elevasi apabila tersedia).
+- Ekspor memerlukan titik GPS yang valid; perjalanan tanpa data GPS akan menampilkan pesan kesalahan.
+- Berbagi GPX tidak otomatis mengunggah aktivitas ke Strava. Sinkronisasi Strava langsung tetap tahap terpisah.
+- Kode baru belum dibuild/diuji pada POCO X7 Pro. Build Android hanya dijalankan manual sesuai kesepakatan.
