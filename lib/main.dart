@@ -2,12 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'account_page.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() => runApp(const CycloCompApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  const enabled = bool.fromEnvironment('CYCLOCOMP_AUTH_ENABLED', defaultValue: false);
+  const url = String.fromEnvironment('SUPABASE_URL');
+  const anonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+  if (enabled && url.isNotEmpty && anonKey.isNotEmpty) {
+    await Supabase.initialize(url: url, anonKey: anonKey);
+  }
+  runApp(const CycloCompApp());
+}
 
 class CycloCompApp extends StatelessWidget {
   const CycloCompApp({super.key});
@@ -287,7 +298,7 @@ class _RidePageState extends State<RidePage> {
       ]),
       actions:[Icon(recording?Icons.gps_fixed:Icons.gps_not_fixed,color:green),
         const SizedBox(width:16)]),
-    body:IndexedStack(index:currentTab,children:[dashboard(),mapScreen(),history()]),
+    body:IndexedStack(index:currentTab,children:[dashboard(),mapScreen(),history(),const AccountPage()]),
     bottomNavigationBar:NavigationBar(
       backgroundColor:panel,selectedIndex:currentTab,
       onDestinationSelected:(value)=>setState(()=>currentTab=value),
@@ -295,6 +306,7 @@ class _RidePageState extends State<RidePage> {
         NavigationDestination(icon:Icon(Icons.dashboard_outlined),selectedIcon:Icon(Icons.dashboard),label:'Dashboard'),
         NavigationDestination(icon:Icon(Icons.map_outlined),selectedIcon:Icon(Icons.map),label:'Peta'),
         NavigationDestination(icon:Icon(Icons.history),label:'Riwayat'),
+        NavigationDestination(icon:Icon(Icons.person_outline),label:'Akun'),
       ],
     ),
   );
