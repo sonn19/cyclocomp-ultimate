@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'account_page.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:geolocator_android/geolocator_android.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -47,6 +48,9 @@ class _RidePageState extends State<RidePage> {
   int seconds = 0;
   int currentTab = 0;
   int movingSeconds = 0;
+  DateTime? previousFixTime;
+  DateTime? lastBackupAt;
+  bool finishing = false;
   DateTime? lastResumeAt;
   DateTime? pausedAt;
   Duration pausedDuration = Duration.zero;
@@ -56,12 +60,48 @@ class _RidePageState extends State<RidePage> {
   List<Map<String, dynamic>> rides = [];
 
   @override
-  void initState() { super.initState(); loadRides(); }
+  void initState() { super.initState(); loadRides(); recoverInterruptedRide(); }
 
   Future<void> loadRides() async {
     final p = await SharedPreferences.getInstance();
     final entries = p.getStringList('rides') ?? [];
     if (mounted) setState(() => rides = entries.map((e) => Map<String,dynamic>.from(jsonDecode(e) as Map)).toList());
+  }
+
+  Map<String, dynamic> get rideSnapshot => {
+    'started': started?.toIso8601String(),
+    'distanceKm': distance / 1000,
+    'maxSpeed': maxSpeed,
+    'elapsedSeconds': started == null ? seconds : DateTime.now().difference(started!).inSeconds,
+    'movingSeconds': movingSeconds,
+    'track': List<Map<String, dynamic>>.from(track),
+  };
+
+  Future<void> saveDraft() async {
+    if (!recording) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setString('active_ride_backup', jsonEncode(rideSnapshot));
+  }
+
+  Future<void> recoverInterruptedRide() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString('active_ride_backup');
+    if (raw == null) return;
+    try {
+      final recovered = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      recovered['interrupted'] = true;
+      recovered['recoveredAt'] = DateTime.now().toIso8601String();
+      final current = p.getStringList('rides') ?? [];
+      current.insert(0, jsonEncode(recovered));
+      await p.setStringList('rides', current);
+      await p.remove('active_ride_backup');
+      if (mounted) setState(() {
+        rides = current.map((e) => Map<String, dynamic>.from(jsonDecode(e) as Map)).toList();
+        status = 'Perjalanan sebelumnya dipulihkan dari backup (mungkin tidak lengkap).';
+      });
+    } catch (_) {
+      if (mounted) setState(() => status = 'Backup perjalanan gagal dibaca; data backup tidak dihapus.');
+    }
   }
 
   Future<void> startRide() async {
@@ -82,16 +122,29 @@ class _RidePageState extends State<RidePage> {
       recording = true; paused = false; previous = null;
       speed = 0; maxSpeed = 0; distance = 0; altitude = 0; seconds = 0;
       started = DateTime.now(); lastResumeAt = started; pausedAt = null; pausedDuration = Duration.zero;
-      currentPoint = null; movingSeconds = 0; track.clear(); status = 'Merekam — menunggu titik GPS pertama. Uji di luar ruangan.';
+      currentPoint = null; movingSeconds = 0; previousFixTime = null; lastBackupAt = null;
+      track.clear(); status = 'Merekam — menunggu titik GPS pertama. Uji di luar ruangan.';
     });
+    await saveDraft();
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && recording) setState(() {
-        seconds = DateTime.now().difference(started!).inSeconds;
-        if (!paused && speed >= 1) movingSeconds++;
-      });
+      if (!mounted || !recording) return;
+      setState(() => seconds = DateTime.now().difference(started!).inSeconds);
+      if (lastBackupAt == null || DateTime.now().difference(lastBackupAt!) >= const Duration(seconds: 10)) {
+        lastBackupAt = DateTime.now();
+        unawaited(saveDraft());
+      }
     });
-    gps = Geolocator.getPositionStream(locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 0,
+    gps = Geolocator.getPositionStream(locationSettings: const AndroidSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 3,
+      intervalDuration: Duration(seconds: 2),
+      foregroundNotificationConfig: ForegroundNotificationConfig(
+        notificationTitle: 'CycloComp sedang merekam',
+        notificationText: 'Rekaman GPS aktif meskipun layar terkunci',
+        notificationChannelName: 'Rekaman Gowes',
+        enableWakeLock: true,
+        setOngoing: true,
+      ),
     )).listen((p) {
       if (!mounted || !recording || paused) return;
       if (p.accuracy > 100) { setState(() => status = 'GPS belum akurat (±\${p.accuracy.toStringAsFixed(0)} m). Coba area terbuka.'); return; }
@@ -100,9 +153,14 @@ class _RidePageState extends State<RidePage> {
       if (previous != null) {
         final dt = p.timestamp.difference(previous!.timestamp).inMilliseconds / 1000;
         final meters = Geolocator.distanceBetween(previous!.latitude, previous!.longitude, p.latitude, p.longitude);
-        if (dt > 0 && meters / dt <= 28 && meters < 150) distance += meters;
+        if (dt > 0 && dt <= 30 && meters / dt <= 28 && meters < 150 &&
+            meters >= 3 && p.accuracy <= 40) {
+          distance += meters;
+          if (nextSpeed >= 2) movingSeconds += dt.round();
+        }
       }
       previous = p;
+      previousFixTime = p.timestamp;
       currentPoint = LatLng(p.latitude, p.longitude);
       track.add({'lat':p.latitude,'lon':p.longitude,'time':p.timestamp.toIso8601String(),'alt':p.altitude});
       setState(() { speed = nextSpeed < 1 ? 0 : nextSpeed; maxSpeed = max(maxSpeed,speed); altitude = p.altitude; status = 'GPS aktif • \${track.length} titik • akurasi ±\${p.accuracy.toStringAsFixed(0)} m'; });
@@ -115,24 +173,36 @@ class _RidePageState extends State<RidePage> {
     }
   }
 
-  void togglePause() => setState(() {
-    paused = !paused; previous = null; speed = 0;
+  void togglePause() { setState(() {
+    paused = !paused; previous = null; previousFixTime = null; speed = 0;
     if (paused) { pausedAt = DateTime.now(); }
     else if (pausedAt != null) { pausedDuration += DateTime.now().difference(pausedAt!); pausedAt = null; }
   });
+    unawaited(saveDraft());
+  }
 
   Future<void> finishRide() async {
-    await gps?.cancel(); timer?.cancel();
-    if (!recording) return;
-    final entry = {'started':started?.toIso8601String(), 'distanceKm':distance/1000,
-      'maxSpeed':maxSpeed, 'elapsedSeconds': started == null ? seconds : DateTime.now().difference(started!).inSeconds,
-      'movingSeconds':movingSeconds, 'track':List<Map<String,dynamic>>.from(track)};
-    final p = await SharedPreferences.getInstance();
-    final current = p.getStringList('rides') ?? [];
-    current.insert(0,jsonEncode(entry));
-    await p.setStringList('rides',current);
-    if (mounted) setState(() { recording = false; paused = false; speed = 0; status = 'Perjalanan disimpan'; });
-    await loadRides();
+    if (!recording || finishing) return;
+    setState(() => finishing = true);
+    await gps?.cancel();
+    timer?.cancel();
+    final entry = rideSnapshot;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final current = p.getStringList('rides') ?? [];
+      current.insert(0, jsonEncode(entry));
+      final saved = await p.setStringList('rides', current);
+      if (!saved) throw StateError('Gagal menulis riwayat');
+      await p.remove('active_ride_backup');
+      if (mounted) setState(() {
+        recording = false; paused = false; speed = 0;
+        status = 'Perjalanan disimpan'; rides = current.map((e) => Map<String,dynamic>.from(jsonDecode(e) as Map)).toList();
+      });
+    } catch (e) {
+      if (mounted) setState(() => status = 'Gagal menyimpan: $e. Backup tetap tersedia.');
+    } finally {
+      if (mounted) setState(() => finishing = false);
+    }
   }
 
   @override
@@ -209,7 +279,7 @@ class _RidePageState extends State<RidePage> {
       )),
       const SizedBox(width:10),
       Expanded(child:FilledButton.icon(
-        onPressed:finishRide,
+        onPressed:finishing ? null : finishRide,
         icon:const Icon(Icons.stop),label:const Text('SELESAI'),
         style:FilledButton.styleFrom(backgroundColor:green,foregroundColor:Colors.black),
       )),
@@ -258,7 +328,7 @@ class _RidePageState extends State<RidePage> {
     ]),
     SizedBox(height:190,child:mapView(compact:true)),
     rideControls(),
-    const Text('Catatan: mode layar mati masih dalam pengembangan. Jangan bergantung pada versi ini untuk perjalanan panjang.',
+    const Text('Mode GPS background aktif saat merekam. Jaga notifikasi CycloComp tetap aktif dan uji sebelum gowes jauh.',
       style:TextStyle(color:Colors.orangeAccent,fontSize:11)),
   ]);
 
