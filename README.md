@@ -48,3 +48,12 @@ Tanpa konfigurasi, tab Akun menampilkan status mode tamu; tombol rekam dan riway
 GitHub Actions kini hanya berjalan **manual**, melalui **Actions → Build Android APK → Run workflow**, supaya perubahan fitur kecil tidak membangun APK berulang-ulang.
 
 **Penting:** Perekaman GPS saat layar mati masih belum teruji dan belum andal. Untuk sementara jangan mengandalkan aplikasi untuk perjalanan panjang.
+
+## Background GPS milestone (belum diuji pada perangkat)
+- Saat Mulai Gowes, Android memulai foreground location tracking melalui geolocator_android dan menampilkan notifikasi "CycloComp sedang merekam".
+- AndroidManifest saat build diberi izin lokasi presisi, foreground service lokasi, wake lock, dan Internet.
+- Waktu total dihitung dari jam mulai sehingga penghentian timer oleh sistem tidak membuat waktu 30 menit menjadi 2 menit.
+- Titik GPS dan statistik dicadangkan tiap sekitar 10 detik ke penyimpanan lokal dan dipulihkan sebagai perjalanan tidak lengkap saat aplikasi dibuka ulang.
+- Perjalanan lama dan baru belum disinkronkan ke cloud. Backup perangkat bukan jaminan jika aplikasi di-force stop, penyimpanan dihapus, atau sistem mematikan layanan.
+- Ketika background service aktif, notifikasi harus tetap terlihat. Buka pengaturan aplikasi Android untuk mengizinkan Lokasi Presisi dan tidak membatasi baterai.
+- Uji khusus: perjalanan 30 menit, layar terkunci >=20 menit, cek rute GPS dan elapsed time setelah selesai. Jangan mengandalkan aplikasi untuk perjalanan utama sebelum lulus uji.
