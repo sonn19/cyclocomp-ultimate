@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-const authConfigured = bool.fromEnvironment('CYCLOCOMP_AUTH_ENABLED', defaultValue: false);
+const authConfigured = bool.fromEnvironment('CYCLOCOMP_AUTH_ENABLED', defaultValue: false) &&
+  String.fromEnvironment('SUPABASE_URL') != '' &&
+  String.fromEnvironment('SUPABASE_ANON_KEY') != '';
 
 class AccountPage extends StatefulWidget {
   const AccountPage({super.key});
