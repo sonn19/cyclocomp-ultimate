@@ -422,6 +422,11 @@ class _RidePageState extends State<RidePage> {
     if(rides.isEmpty) const Text('Belum ada perjalanan yang disimpan.'),
     for(final r in rides) Card(color:panel,child:ListTile(
       leading:const Icon(Icons.route,color:green),
+      trailing:IconButton(
+        tooltip:'Bagikan GPX',
+        icon:const Icon(Icons.ios_share,color:green),
+        onPressed:()=>exportRide(r),
+      ),
       title:Text('${((r['distanceKm'] as num?)??0).toStringAsFixed(2)} km'),
       subtitle:Text('${r['started']??'-'} • ${_clock(((r['elapsedSeconds']??r['movingSeconds']) as num?)?.toInt() ?? 0)}'),
     )),
