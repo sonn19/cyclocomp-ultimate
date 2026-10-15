@@ -34,7 +34,14 @@ jobs:
           p=Path('android/app/src/main/AndroidManifest.xml')
           s=p.read_text()
           marker='<application'
-          perms='    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n'
+          perms=''.join([
+            '    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\\n',
+            '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\\n',
+            '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\\n',
+            '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />\\n',
+            '    <uses-permission android:name="android.permission.WAKE_LOCK" />\\n',
+            '    <uses-permission android:name="android.permission.INTERNET" />\\n',
+          ])
           assert marker in s
           s=s.replace(marker,perms+marker,1)
           p.write_text(s)
