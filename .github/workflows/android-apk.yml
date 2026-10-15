@@ -10,7 +10,7 @@ on:
       - '.github/workflows/android-apk.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -58,3 +58,13 @@ jobs:
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+      - name: Prepare direct-download APK
+        run: cp build/app/outputs/flutter-apk/app-debug.apk CycloComp-Ultimate.apk
+      - name: Publish direct APK to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view android-preview >/dev/null 2>&1; then
+            gh release create android-preview --target "$GITHUB_SHA" --title "CycloComp Ultimate - Android Preview" --notes "Versi uji coba Android. APK debug untuk pengujian GPS; belum versi premium final." --prerelease
+          fi
+          gh release upload android-preview CycloComp-Ultimate.apk --clobber
