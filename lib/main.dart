@@ -405,6 +405,17 @@ class _RidePageState extends State<RidePage> {
     Padding(padding:const EdgeInsets.symmetric(horizontal:16),child:rideControls()),
   ]);
 
+  Future<void> exportRide(Map<String,dynamic> ride) async {
+    try {
+      await shareRideGpx(ride);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content:Text('Ekspor GPX gagal: $e')),
+      );
+    }
+  }
+
   Widget history() => ListView(padding:const EdgeInsets.all(16),children:[
     const Text('RIWAYAT GOWES',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
     const SizedBox(height:14),
