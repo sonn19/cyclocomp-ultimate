@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() => runApp(const CycloCompApp());
@@ -32,6 +34,12 @@ class _RidePageState extends State<RidePage> {
   bool recording = false, paused = false, starting = false;
   double speed = 0, maxSpeed = 0, distance = 0, altitude = 0;
   int seconds = 0;
+  int currentTab = 0;
+  int movingSeconds = 0;
+  DateTime? lastResumeAt;
+  DateTime? pausedAt;
+  Duration pausedDuration = Duration.zero;
+  LatLng? currentPoint;
   String status = 'GPS siap';
   final List<Map<String, dynamic>> track = [];
   List<Map<String, dynamic>> rides = [];
@@ -62,10 +70,14 @@ class _RidePageState extends State<RidePage> {
     setState(() {
       recording = true; paused = false; previous = null;
       speed = 0; maxSpeed = 0; distance = 0; altitude = 0; seconds = 0;
-      started = DateTime.now(); track.clear(); status = 'Merekam — menunggu titik GPS pertama. Uji di luar ruangan.';
+      started = DateTime.now(); lastResumeAt = started; pausedAt = null; pausedDuration = Duration.zero;
+      currentPoint = null; movingSeconds = 0; track.clear(); status = 'Merekam — menunggu titik GPS pertama. Uji di luar ruangan.';
     });
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && recording && !paused) setState(() => seconds++);
+      if (mounted && recording) setState(() {
+        seconds = DateTime.now().difference(started!).inSeconds;
+        if (!paused && speed >= 1) movingSeconds++;
+      });
     });
     gps = Geolocator.getPositionStream(locationSettings: const LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 0,
@@ -80,6 +92,7 @@ class _RidePageState extends State<RidePage> {
         if (dt > 0 && meters / dt <= 28 && meters < 150) distance += meters;
       }
       previous = p;
+      currentPoint = LatLng(p.latitude, p.longitude);
       track.add({'lat':p.latitude,'lon':p.longitude,'time':p.timestamp.toIso8601String(),'alt':p.altitude});
       setState(() { speed = nextSpeed < 1 ? 0 : nextSpeed; maxSpeed = max(maxSpeed,speed); altitude = p.altitude; status = 'GPS aktif • \${track.length} titik • akurasi ±\${p.accuracy.toStringAsFixed(0)} m'; });
     }, onError: (Object e) { if (mounted) setState(() => status = 'GPS error: $e'); });
@@ -91,13 +104,18 @@ class _RidePageState extends State<RidePage> {
     }
   }
 
-  void togglePause() => setState(() { paused = !paused; previous = null; speed = 0; });
+  void togglePause() => setState(() {
+    paused = !paused; previous = null; speed = 0;
+    if (paused) { pausedAt = DateTime.now(); }
+    else if (pausedAt != null) { pausedDuration += DateTime.now().difference(pausedAt!); pausedAt = null; }
+  });
 
   Future<void> finishRide() async {
     await gps?.cancel(); timer?.cancel();
     if (!recording) return;
     final entry = {'started':started?.toIso8601String(), 'distanceKm':distance/1000,
-      'maxSpeed':maxSpeed, 'movingSeconds':seconds, 'track':List<Map<String,dynamic>>.from(track)};
+      'maxSpeed':maxSpeed, 'elapsedSeconds': started == null ? seconds : DateTime.now().difference(started!).inSeconds,
+      'movingSeconds':movingSeconds, 'track':List<Map<String,dynamic>>.from(track)};
     final p = await SharedPreferences.getInstance();
     final current = p.getStringList('rides') ?? [];
     current.insert(0,jsonEncode(entry));
@@ -122,39 +140,162 @@ class _RidePageState extends State<RidePage> {
     ]),
   ));
 
+
+  static const green = Color(0xFF44E9AE);
+  static const panel = Color(0xFF172638);
+  final MapController mapController = MapController();
+
+  List<LatLng> get path => track.map((p) => LatLng(
+    (p['lat'] as num).toDouble(), (p['lon'] as num).toDouble(),
+  )).toList();
+
+  Widget stat(String name, String number, String unit, IconData icon) => Container(
+    padding: const EdgeInsets.all(13),
+    decoration: BoxDecoration(color:panel,borderRadius:BorderRadius.circular(16)),
+    child: Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      Row(children:[Icon(icon,color:green,size:16),const SizedBox(width:5),
+        Expanded(child:Text(name,style:const TextStyle(fontSize:10,color:Color(0xFF9EB4C9))))]),
+      const SizedBox(height:9),
+      Text(number,style:const TextStyle(fontSize:23,fontWeight:FontWeight.bold)),
+      Text(unit,style:const TextStyle(fontSize:11,color:Color(0xFF9EB4C9))),
+    ]),
+  );
+
+  Widget mapView({bool compact = false}) {
+    final center = currentPoint ?? (path.isNotEmpty ? path.last : const LatLng(-6.8048,110.8405));
+    return ClipRRect(
+      borderRadius:BorderRadius.circular(16),
+      child: FlutterMap(
+        key: ValueKey(compact ? 'mini-map' : 'full-map'),
+        options: MapOptions(initialCenter:center,initialZoom:compact ? 15 : 14),
+        children:[
+          TileLayer(
+            urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName:'com.cyclocomp.ultimate',
+          ),
+          if (path.length >= 2) PolylineLayer(polylines:[
+            Polyline(points:path,color:green,strokeWidth:4),
+          ]),
+          if (currentPoint != null) MarkerLayer(markers:[
+            Marker(point:currentPoint!,width:42,height:42,child:const Icon(
+              Icons.my_location,color:Colors.blueAccent,size:38)),
+          ]),
+          const RichAttributionWidget(attributions:[
+            TextSourceAttribution('© OpenStreetMap contributors'),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Widget rideControls() => Padding(
+    padding:const EdgeInsets.symmetric(vertical:10),
+    child: recording ? Row(children:[
+      Expanded(child:OutlinedButton.icon(
+        onPressed:togglePause,
+        icon:Icon(paused ? Icons.play_arrow : Icons.pause),
+        label:Text(paused ? 'LANJUT' : 'JEDA'),
+      )),
+      const SizedBox(width:10),
+      Expanded(child:FilledButton.icon(
+        onPressed:finishRide,
+        icon:const Icon(Icons.stop),label:const Text('SELESAI'),
+        style:FilledButton.styleFrom(backgroundColor:green,foregroundColor:Colors.black),
+      )),
+    ]) : FilledButton.icon(
+      onPressed:starting ? null : startRide,
+      icon:const Icon(Icons.play_arrow),
+      label:Text(starting ? 'MENYIAPKAN GPS...' : 'MULAI GOWES'),
+      style:FilledButton.styleFrom(backgroundColor:green,foregroundColor:Colors.black,
+        padding:const EdgeInsets.all(16)),
+    ),
+  );
+
+  Widget dashboard() => ListView(padding:const EdgeInsets.all(16),children:[
+    Text(status,style:const TextStyle(color:green,fontSize:12)),
+    const SizedBox(height:12),
+    Container(
+      padding:const EdgeInsets.all(22),
+      decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(20)),
+      child:Column(children:[
+        const Text('CURRENT SPEED',style:TextStyle(letterSpacing:2,fontSize:12,color:Color(0xFF9EB4C9))),
+        Text(speed.toStringAsFixed(1),style:const TextStyle(fontSize:80,fontWeight:FontWeight.w800,height:1.2)),
+        const Text('km/h',style:TextStyle(color:Color(0xFF9EB4C9))),
+        const SizedBox(height:12),
+        Text(recording ? (paused ? '⏸ DIJEDA' : '● RECORDING') : 'SIAP MEREKAM',
+          style:const TextStyle(color:green,fontWeight:FontWeight.bold)),
+        Text(duration,style:const TextStyle(fontSize:18)),
+      ]),
+    ),
+    const SizedBox(height:12),
+    GridView.count(
+      physics:const NeverScrollableScrollPhysics(),shrinkWrap:true,
+      crossAxisCount:3,childAspectRatio:0.95,crossAxisSpacing:8,mainAxisSpacing:8,
+      children:[
+        stat('DISTANCE',(distance/1000).toStringAsFixed(2),'km',Icons.route),
+        stat('AVG SPEED',movingSeconds > 0 ? (distance / movingSeconds * 3.6).toStringAsFixed(1) : '0.0','km/h',Icons.speed),
+        stat('MAX SPEED',maxSpeed.toStringAsFixed(1),'km/h',Icons.trending_up),
+        stat('MOVE TIME',_clock(movingSeconds),'hh:mm:ss',Icons.timer),
+        stat('GPS POINTS','${track.length}','points',Icons.gps_fixed),
+        stat('ELEVATION',altitude.toStringAsFixed(0),'m',Icons.terrain),
+      ],
+    ),
+    const SizedBox(height:14),
+    Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+      const Text('LIVE ROUTE',style:TextStyle(fontWeight:FontWeight.bold)),
+      TextButton(onPressed:()=>setState(()=>currentTab=1),child:const Text('LIHAT PETA →')),
+    ]),
+    SizedBox(height:190,child:mapView(compact:true)),
+    rideControls(),
+    const Text('Catatan: mode layar mati masih dalam pengembangan. Jangan bergantung pada versi ini untuk perjalanan panjang.',
+      style:TextStyle(color:Colors.orangeAccent,fontSize:11)),
+  ]);
+
+  String _clock(int n) =>
+    '${(n~/3600).toString().padLeft(2,'0')}:${((n%3600)~/60).toString().padLeft(2,'0')}:${(n%60).toString().padLeft(2,'0')}';
+
+  Widget mapScreen() => Column(children:[
+    Expanded(child:mapView()),
+    Padding(padding:const EdgeInsets.symmetric(horizontal:16,vertical:6),child:Row(
+      mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
+        Text('${(distance/1000).toStringAsFixed(2)} km'),
+        Text('Titik GPS: ${track.length}'),
+        Text(duration),
+      ],
+    )),
+    Padding(padding:const EdgeInsets.symmetric(horizontal:16),child:rideControls()),
+  ]);
+
+  Widget history() => ListView(padding:const EdgeInsets.all(16),children:[
+    const Text('RIWAYAT GOWES',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
+    const SizedBox(height:14),
+    if(rides.isEmpty) const Text('Belum ada perjalanan yang disimpan.'),
+    for(final r in rides) Card(color:panel,child:ListTile(
+      leading:const Icon(Icons.route,color:green),
+      title:Text('${((r['distanceKm'] as num?)??0).toStringAsFixed(2)} km'),
+      subtitle:Text('${r['started']??'-'} • ${_clock(((r['elapsedSeconds']??r['movingSeconds']) as num?)?.toInt() ?? 0)}'),
+    )),
+  ]);
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title:const Text('🚴 CycloComp Ultimate')),
-    body: ListView(padding:const EdgeInsets.all(16),children:[
-      Text(status,style:const TextStyle(color:Colors.greenAccent)),
-      if (recording) Text(paused ? 'Dijeda — perjalanan belum dihentikan' : '● REKAM AKTIF — waktu terus berjalan meskipun belum bergerak',style:const TextStyle(color:Colors.orangeAccent)),
-      const SizedBox(height:20),
-      const Center(child:Text('KECEPATAN GPS')),
-      Center(child:Text(speed.toStringAsFixed(1),style:const TextStyle(fontSize:86,fontWeight:FontWeight.bold))),
-      const Center(child:Text('km/jam')),
-      const SizedBox(height:20),
-      Row(children:[
-        Expanded(child:metric('JARAK','${(distance/1000).toStringAsFixed(2)} km')),
-        Expanded(child:metric('WAKTU',duration)),
+    backgroundColor:const Color(0xFF0B1420),
+    appBar:AppBar(backgroundColor:const Color(0xFF0B1420),
+      title:const Row(children:[
+        Icon(Icons.directions_bike,color:green),SizedBox(width:10),
+        Text('CYCLOCOMP',style:TextStyle(fontSize:19,fontWeight:FontWeight.w800,letterSpacing:1)),
       ]),
-      Row(children:[
-        Expanded(child:metric('MAX SPEED','${maxSpeed.toStringAsFixed(1)} km/h')),
-        Expanded(child:metric('ELEVASI','${altitude.toStringAsFixed(0)} m')),
-      ]),
-      const SizedBox(height:12),
-      if (!recording) FilledButton(onPressed:starting ? null : startRide,child:Text(starting ? 'MENYIAPKAN GPS...' : 'MULAI GOWES')),
-      if (recording) Row(children:[
-        Expanded(child:OutlinedButton(onPressed:togglePause,child:Text(paused?'LANJUTKAN':'JEDA'))),
-        const SizedBox(width:12),
-        Expanded(child:FilledButton(onPressed:finishRide,child:const Text('SELESAI'))),
-      ]),
-      const SizedBox(height:24),
-      Text('Riwayat Gowes',style:Theme.of(context).textTheme.titleLarge),
-      for (final r in rides.take(20)) ListTile(
-        leading:const Icon(Icons.route),
-        title:Text('${((r['distanceKm'] as num?)??0).toStringAsFixed(2)} km'),
-        subtitle:Text('${r['started']??'-'}'),
-      ),
-    ]),
+      actions:[Icon(recording?Icons.gps_fixed:Icons.gps_not_fixed,color:green),
+        const SizedBox(width:16)]),
+    body:IndexedStack(index:currentTab,children:[dashboard(),mapScreen(),history()]),
+    bottomNavigationBar:NavigationBar(
+      backgroundColor:panel,selectedIndex:currentTab,
+      onDestinationSelected:(value)=>setState(()=>currentTab=value),
+      destinations:const [
+        NavigationDestination(icon:Icon(Icons.dashboard_outlined),selectedIcon:Icon(Icons.dashboard),label:'Dashboard'),
+        NavigationDestination(icon:Icon(Icons.map_outlined),selectedIcon:Icon(Icons.map),label:'Peta'),
+        NavigationDestination(icon:Icon(Icons.history),label:'Riwayat'),
+      ],
+    ),
   );
 }
