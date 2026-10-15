@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'account_page.dart';
+import 'gpx_export.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geolocator_android/geolocator_android.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -53,6 +54,7 @@ class _RidePageState extends State<RidePage> {
   DateTime? lastBackupAt;
   bool finishing = false;
   bool keepScreenOn = false;
+  double? gpsAccuracy;
   DateTime? lastResumeAt;
   DateTime? pausedAt;
   Duration pausedDuration = Duration.zero;
@@ -143,6 +145,7 @@ class _RidePageState extends State<RidePage> {
       speed = 0; maxSpeed = 0; distance = 0; altitude = 0; seconds = 0;
       started = DateTime.now(); lastResumeAt = started; pausedAt = null; pausedDuration = Duration.zero;
       currentPoint = null; movingSeconds = 0; previousFixTime = null; lastBackupAt = null;
+      gpsAccuracy = null;
       track.clear(); status = 'Merekam — menunggu titik GPS pertama. Uji di luar ruangan.';
     });
     await saveDraft();
@@ -167,6 +170,7 @@ class _RidePageState extends State<RidePage> {
       ),
     )).listen((p) {
       if (!mounted || !recording || paused) return;
+      gpsAccuracy = p.accuracy;
       if (p.accuracy > 100) { setState(() => status = 'GPS belum akurat (±\${p.accuracy.toStringAsFixed(0)} m). Coba area terbuka.'); return; }
       final nextSpeed = max(0.0, p.speed * 3.6);
       if (nextSpeed > 100) return;
