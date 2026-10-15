@@ -29,7 +29,7 @@ class _RidePageState extends State<RidePage> {
   Timer? timer;
   Position? previous;
   DateTime? started;
-  bool recording = false, paused = false;
+  bool recording = false, paused = false, starting = false;
   double speed = 0, maxSpeed = 0, distance = 0, altitude = 0;
   int seconds = 0;
   String status = 'GPS siap';
@@ -46,29 +46,32 @@ class _RidePageState extends State<RidePage> {
   }
 
   Future<void> startRide() async {
+    if (starting || recording) return;
+    setState(() { starting = true; status = 'Memeriksa izin GPS...'; });
+    try {
     if (!await Geolocator.isLocationServiceEnabled()) {
-      setState(() => status = 'Aktifkan GPS'); return;
+      setState(() => status = 'Lokasi HP mati. Aktifkan Lokasi/GPS lalu coba lagi.'); return;
     }
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) permission = await Geolocator.requestPermission();
     if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-      setState(() => status = 'Izin lokasi diperlukan'); return;
+      setState(() => status = 'Izinkan lokasi untuk CycloComp di pengaturan Android.'); return;
     }
     await gps?.cancel();
     timer?.cancel();
     setState(() {
       recording = true; paused = false; previous = null;
       speed = 0; maxSpeed = 0; distance = 0; altitude = 0; seconds = 0;
-      started = DateTime.now(); track.clear(); status = 'Mencari sinyal GPS';
+      started = DateTime.now(); track.clear(); status = 'Merekam — menunggu titik GPS pertama. Uji di luar ruangan.';
     });
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && recording && !paused && speed >= 1) setState(() => seconds++);
+      if (mounted && recording && !paused) setState(() => seconds++);
     });
     gps = Geolocator.getPositionStream(locationSettings: const LocationSettings(
-      accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 3,
+      accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 0,
     )).listen((p) {
       if (!mounted || !recording || paused) return;
-      if (p.accuracy > 45) { setState(() => status = 'Menunggu GPS akurat'); return; }
+      if (p.accuracy > 100) { setState(() => status = 'GPS belum akurat (±\${p.accuracy.toStringAsFixed(0)} m). Coba area terbuka.'); return; }
       final nextSpeed = max(0.0, p.speed * 3.6);
       if (nextSpeed > 100) return;
       if (previous != null) {
@@ -78,8 +81,14 @@ class _RidePageState extends State<RidePage> {
       }
       previous = p;
       track.add({'lat':p.latitude,'lon':p.longitude,'time':p.timestamp.toIso8601String(),'alt':p.altitude});
-      setState(() { speed = nextSpeed < 1 ? 0 : nextSpeed; maxSpeed = max(maxSpeed,speed); altitude = p.altitude; status = 'GPS aktif'; });
+      setState(() { speed = nextSpeed < 1 ? 0 : nextSpeed; maxSpeed = max(maxSpeed,speed); altitude = p.altitude; status = 'GPS aktif • \${track.length} titik • akurasi ±\${p.accuracy.toStringAsFixed(0)} m'; });
     }, onError: (Object e) { if (mounted) setState(() => status = 'GPS error: $e'); });
+    } catch (e) {
+      await gps?.cancel(); timer?.cancel();
+      if (mounted) setState(() { recording = false; status = 'Gagal mulai merekam: $e'; });
+    } finally {
+      if (mounted) setState(() => starting = false);
+    }
   }
 
   void togglePause() => setState(() { paused = !paused; previous = null; speed = 0; });
@@ -118,6 +127,7 @@ class _RidePageState extends State<RidePage> {
     appBar: AppBar(title:const Text('🚴 CycloComp Ultimate')),
     body: ListView(padding:const EdgeInsets.all(16),children:[
       Text(status,style:const TextStyle(color:Colors.greenAccent)),
+      if (recording) Text(paused ? 'Dijeda — perjalanan belum dihentikan' : '● REKAM AKTIF — waktu terus berjalan meskipun belum bergerak',style:const TextStyle(color:Colors.orangeAccent)),
       const SizedBox(height:20),
       const Center(child:Text('KECEPATAN GPS')),
       Center(child:Text(speed.toStringAsFixed(1),style:const TextStyle(fontSize:86,fontWeight:FontWeight.bold))),
@@ -132,7 +142,7 @@ class _RidePageState extends State<RidePage> {
         Expanded(child:metric('ELEVASI','${altitude.toStringAsFixed(0)} m')),
       ]),
       const SizedBox(height:12),
-      if (!recording) FilledButton(onPressed:startRide,child:const Text('MULAI GOWES')),
+      if (!recording) FilledButton(onPressed:starting ? null : startRide,child:Text(starting ? 'MENYIAPKAN GPS...' : 'MULAI GOWES')),
       if (recording) Row(children:[
         Expanded(child:OutlinedButton(onPressed:togglePause,child:Text(paused?'LANJUTKAN':'JEDA'))),
         const SizedBox(width:12),
