@@ -334,6 +334,15 @@ class _RidePageState extends State<RidePage> {
 
   Widget dashboard() => ListView(padding:const EdgeInsets.all(16),children:[
     Text(status,style:const TextStyle(color:green,fontSize:12)),
+    const SizedBox(height:6),
+    Row(children:[
+      Icon(gpsAccuracy == null ? Icons.gps_off : gpsAccuracy! <= 20 ? Icons.gps_fixed : Icons.gps_not_fixed,
+        color:gpsAccuracy == null ? Colors.grey : gpsAccuracy! <= 20 ? green : Colors.amber,size:16),
+      const SizedBox(width:6),
+      Expanded(child:Text(gpsAccuracy == null ? 'GPS: menunggu sinyal' :
+        'GPS accuracy: ' + gpsAccuracy!.toStringAsFixed(0) + ' m',
+        style:const TextStyle(fontSize:12))),
+    ]),
     SwitchListTile.adaptive(
       dense:true,
       contentPadding:EdgeInsets.zero,
