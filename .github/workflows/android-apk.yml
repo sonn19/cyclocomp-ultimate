@@ -2,6 +2,12 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/android-apk.yml'
 
 permissions:
   contents: write
@@ -41,6 +47,10 @@ jobs:
             'android.permission.FOREGROUND_SERVICE_LOCATION',
             'android.permission.WAKE_LOCK',
             'android.permission.INTERNET',
+            'android.permission.BLUETOOTH',
+            'android.permission.BLUETOOTH_ADMIN',
+            'android.permission.BLUETOOTH_SCAN',
+            'android.permission.BLUETOOTH_CONNECT',
           ]
           perms=''.join('    <uses-permission android:name="'+name+'" />'+chr(10) for name in permissions)
           assert marker in s
@@ -66,7 +76,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view android-preview >/dev/null 2>&1; then
-            gh release create android-preview --target "$GITHUB_SHA" --title "CycloComp Ultimate - Android Preview" --notes "Versi uji coba Android. APK debug untuk pengujian GPS; belum versi premium final." --prerelease
-          fi
-          gh release upload android-preview CycloComp-Ultimate.apk --clobber
+          TAG="android-preview-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" CycloComp-Ultimate.apk --target "$GITHUB_SHA" --title "CycloComp Ultimate - Preview ${GITHUB_RUN_NUMBER}" --notes "APK debug pengujian GPS, peta, auto-pause, GPX, BLE dan Bike Garage. Strava belum aktif." --prerelease
