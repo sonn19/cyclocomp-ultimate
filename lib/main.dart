@@ -187,7 +187,7 @@ class _RidePageState extends State<RidePage> {
         unawaited(saveDraft());
       }
     });
-    gps = Geolocator.getPositionStream(locationSettings: const AndroidSettings(
+    gps = Geolocator.getPositionStream(locationSettings: AndroidSettings(
       accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: 3,
       intervalDuration: Duration(seconds: 2),
