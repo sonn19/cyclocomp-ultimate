@@ -59,38 +59,35 @@ jobs:
           PY
       - name: Fetch packages
         run: flutter pub get
+      - name: Install Android SDK API 36
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" || true
       - name: Align Android plugin compile SDK with API 36
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
           app=Path('android/app/build.gradle.kts')
           if app.exists():
-              source=app.read_text()
-              source=re.sub(r'compileSdk\\s*=\\s*flutter.compileSdkVersion', 'compileSdk = 36', source)
-              app.write_text(source)
+              src=app.read_text()
+              src=src.replace('compileSdk = flutter.compileSdkVersion','compileSdk = 36')
+              app.write_text(src)
           else:
               app=Path('android/app/build.gradle')
-              if app.exists():
-                  source=app.read_text()
-                  source=re.sub(r'compileSdkVersion\\s+flutter.compileSdkVersion', 'compileSdkVersion 36', source)
-                  source=re.sub(r'compileSdk\\s+flutter.compileSdkVersion', 'compileSdk 36', source)
-                  app.write_text(source)
+              src=app.read_text()
+              src=src.replace('compileSdkVersion flutter.compileSdkVersion','compileSdkVersion 36')
+              src=src.replace('compileSdk flutter.compileSdkVersion','compileSdk 36')
+              app.write_text(src)
           found=list(Path.home().glob('.pub-cache/hosted/pub.dev/file_picker-*/android/build.gradle'))
           if not found:
               raise SystemExit('file_picker Android Gradle config not found')
           for plugin in found:
-              source=plugin.read_text()
-              updated=re.sub(r'(compileSdk(?:Version)?\\s*(?:=\\s*)?)34\\b', r'\\g<1>36', source)
-              if source == updated:
-                  raise SystemExit(f'No compileSdk 34 setting found in {plugin}')
+              src=plugin.read_text()
+              updated=src.replace('compileSdkVersion 34','compileSdkVersion 36').replace('compileSdk 34','compileSdk 36').replace('compileSdk = 34','compileSdk = 36')
+              if updated == src:
+                  raise SystemExit(f'Expected compileSdk 34 in {plugin}')
               plugin.write_text(updated)
-              print(f'Updated {plugin} to compileSdk 36')
+              print(f'Updated {plugin}')
           PY
-      - name: Install Android SDK API 36
-        run: |
-          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" "platforms;android-36" || true
       - name: Analyze Dart
         run: flutter analyze --no-fatal-infos
       - name: Build installable debug APK
