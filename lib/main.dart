@@ -5,6 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'account_page.dart';
 import 'gpx_export.dart';
+import 'bike_garage.dart';
+import 'route_import.dart';
+import 'sensors_page.dart';
+import 'strava_status.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geolocator_android/geolocator_android.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -55,6 +59,11 @@ class _RidePageState extends State<RidePage> {
   bool finishing = false;
   bool keepScreenOn = false;
   double? gpsAccuracy;
+  RideRoute? plannedRoute;
+  double? deviationMeters;
+  bool autoPauseEnabled = true;
+  bool autoPaused = false;
+  DateTime? lowSpeedSince;
   DateTime? lastResumeAt;
   DateTime? pausedAt;
   Duration pausedDuration = Duration.zero;
@@ -64,7 +73,28 @@ class _RidePageState extends State<RidePage> {
   List<Map<String, dynamic>> rides = [];
 
   @override
-  void initState() { super.initState(); loadRides(); recoverInterruptedRide(); restoreScreenPreference(); }
+  void initState() { super.initState(); loadRides(); recoverInterruptedRide(); restoreScreenPreference(); loadAutoPausePreference(); }
+
+  Future<void> loadAutoPausePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if(mounted) setState(()=>autoPauseEnabled=prefs.getBool('auto_pause_enabled') ?? true);
+  }
+  Future<void> setAutoPause(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auto_pause_enabled',enabled);
+    if(mounted) setState(()=>autoPauseEnabled=enabled);
+  }
+  Future<void> openRoute() async {
+    try {
+      final route=await chooseGpxRoute();
+      if(route != null && mounted) setState(()=>plannedRoute=route);
+    } catch(e) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Impor GPX gagal: $e')));
+    }
+  }
+  void openFeature(Widget page) {
+    Navigator.push(context,MaterialPageRoute<void>(builder:(_)=>page));
+  }
 
   Future<void> restoreScreenPreference() async {
     final prefs = await SharedPreferences.getInstance();
@@ -145,7 +175,7 @@ class _RidePageState extends State<RidePage> {
       speed = 0; maxSpeed = 0; distance = 0; altitude = 0; seconds = 0;
       started = DateTime.now(); lastResumeAt = started; pausedAt = null; pausedDuration = Duration.zero;
       currentPoint = null; movingSeconds = 0; previousFixTime = null; lastBackupAt = null;
-      gpsAccuracy = null;
+      gpsAccuracy = null; autoPaused = false; lowSpeedSince = null;
       track.clear(); status = 'Merekam — menunggu titik GPS pertama. Uji di luar ruangan.';
     });
     await saveDraft();
@@ -173,6 +203,15 @@ class _RidePageState extends State<RidePage> {
       gpsAccuracy = p.accuracy;
       if (p.accuracy > 100) { setState(() => status = 'GPS belum akurat (±\${p.accuracy.toStringAsFixed(0)} m). Coba area terbuka.'); return; }
       final nextSpeed = max(0.0, p.speed * 3.6);
+      if (autoPauseEnabled && !paused) {
+        if (nextSpeed < 2) {
+          lowSpeedSince ??= p.timestamp;
+          if (p.timestamp.difference(lowSpeedSince!) >= const Duration(seconds: 8)) autoPaused=true;
+        } else if (nextSpeed >= 3) {
+          autoPaused=false;
+          lowSpeedSince=null;
+        }
+      } else { autoPaused=false; lowSpeedSince=null; }
       if (nextSpeed > 100) return;
       if (previous != null) {
         final dt = p.timestamp.difference(previous!.timestamp).inMilliseconds / 1000;
@@ -180,12 +219,13 @@ class _RidePageState extends State<RidePage> {
         if (dt > 0 && dt <= 30 && meters / dt <= 28 && meters < 150 &&
             meters >= 3 && p.accuracy <= 40) {
           distance += meters;
-          if (nextSpeed >= 2) movingSeconds += dt.round();
+          if (!autoPaused && nextSpeed >= 2) movingSeconds += dt.round();
         }
       }
       previous = p;
       previousFixTime = p.timestamp;
       currentPoint = LatLng(p.latitude, p.longitude);
+      if(plannedRoute != null) deviationMeters=distanceToRoute(currentPoint!,plannedRoute!.points);
       track.add({'lat':p.latitude,'lon':p.longitude,'time':p.timestamp.toIso8601String(),'alt':p.altitude});
       setState(() { speed = nextSpeed < 1 ? 0 : nextSpeed; maxSpeed = max(maxSpeed,speed); altitude = p.altitude; status = 'GPS aktif • \${track.length} titik • akurasi ±\${p.accuracy.toStringAsFixed(0)} m'; });
     }, onError: (Object e) { if (mounted) setState(() => status = 'GPS error: $e'); });
@@ -199,6 +239,7 @@ class _RidePageState extends State<RidePage> {
 
   void togglePause() { setState(() {
     paused = !paused; previous = null; previousFixTime = null; speed = 0;
+    autoPaused=false; lowSpeedSince=null;
     if (paused) { pausedAt = DateTime.now(); }
     else if (pausedAt != null) { pausedDuration += DateTime.now().difference(pausedAt!); pausedAt = null; }
   });
@@ -294,6 +335,9 @@ class _RidePageState extends State<RidePage> {
             urlTemplate:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             userAgentPackageName:'com.cyclocomp.ultimate',
           ),
+          if (plannedRoute != null) PolylineLayer(polylines:[
+            Polyline(points:plannedRoute!.points,color:Colors.orangeAccent,strokeWidth:4),
+          ]),
           if (path.length >= 2) PolylineLayer(polylines:[
             Polyline(points:path,color:green,strokeWidth:4),
           ]),
@@ -364,7 +408,14 @@ class _RidePageState extends State<RidePage> {
         Text(recording ? (paused ? '⏸ DIJEDA' : '● RECORDING') : 'SIAP MEREKAM',
           style:const TextStyle(color:green,fontWeight:FontWeight.bold)),
         Text(duration,style:const TextStyle(fontSize:18)),
+      if(recording && autoPaused && !paused) const Text('AUTO PAUSE • berhenti',style:TextStyle(color:Colors.orangeAccent)),
       ]),
+    ),
+    SwitchListTile.adaptive(
+      dense:true,contentPadding:EdgeInsets.zero,
+      value:autoPauseEnabled,onChanged:setAutoPause,
+      title:const Text('Auto-pause pintar'),
+      subtitle:const Text('Waktu bergerak berhenti dihitung saat sepeda berhenti. Rekaman GPS tetap aktif.'),
     ),
     const SizedBox(height:12),
     GridView.count(
@@ -394,6 +445,14 @@ class _RidePageState extends State<RidePage> {
     '${(n~/3600).toString().padLeft(2,'0')}:${((n%3600)~/60).toString().padLeft(2,'0')}:${(n%60).toString().padLeft(2,'0')}';
 
   Widget mapScreen() => Column(children:[
+    Padding(padding:const EdgeInsets.all(8),child:Row(children:[
+      Expanded(child:OutlinedButton.icon(onPressed:openRoute,icon:const Icon(Icons.upload_file),
+        label:Text(plannedRoute == null ? 'IMPORT RUTE GPX' : plannedRoute!.name,overflow:TextOverflow.ellipsis))),
+      if(plannedRoute!=null) IconButton(onPressed:()=>setState(() {plannedRoute=null;deviationMeters=null;}),icon:const Icon(Icons.close)),
+    ])),
+    if(deviationMeters != null && plannedRoute != null)
+      Text(deviationMeters! > 80 ? 'PERINGATAN: menjauh dari jalur' : 'Mengikuti jalur',
+        style:TextStyle(color:deviationMeters! > 80 ? Colors.orangeAccent : green)),
     Expanded(child:mapView()),
     Padding(padding:const EdgeInsets.symmetric(horizontal:16,vertical:6),child:Row(
       mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[
@@ -415,6 +474,18 @@ class _RidePageState extends State<RidePage> {
       );
     }
   }
+
+  Widget featureMenu() => ListView(padding:const EdgeInsets.all(16),children:[
+    const Text('FITUR ULTIMATE',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
+    ListTile(leading:const Icon(Icons.directions_bike),title:const Text('Bike Garage'),
+      subtitle:const Text('Sepeda aktif, total km, umur rantai'),onTap:()=>openFeature(const BikeGaragePage())),
+    ListTile(leading:const Icon(Icons.bluetooth),title:const Text('Sensor HR & Cadence'),
+      subtitle:const Text('Scan dan hubungkan sensor BLE'),onTap:()=>openFeature(const SensorsPage())),
+    ListTile(leading:const Icon(Icons.sync),title:const Text('Strava Auto Sync'),
+      subtitle:const Text('Belum terhubung — memerlukan OAuth'),onTap:()=>openFeature(const StravaStatusPage())),
+    ListTile(leading:const Icon(Icons.route),title:const Text('Navigasi GPX'),
+      subtitle:const Text('Buka tab Peta lalu impor file rute'),onTap:()=>setState(()=>currentTab=1)),
+  ]);
 
   Widget history() => ListView(padding:const EdgeInsets.all(16),children:[
     const Text('RIWAYAT GOWES',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
@@ -442,7 +513,7 @@ class _RidePageState extends State<RidePage> {
       ]),
       actions:[Icon(recording?Icons.gps_fixed:Icons.gps_not_fixed,color:green),
         const SizedBox(width:16)]),
-    body:IndexedStack(index:currentTab,children:[dashboard(),mapScreen(),history(),const AccountPage()]),
+    body:IndexedStack(index:currentTab,children:[dashboard(),mapScreen(),history(),featureMenu(),const AccountPage()]),
     bottomNavigationBar:NavigationBar(
       backgroundColor:panel,selectedIndex:currentTab,
       onDestinationSelected:(value)=>setState(()=>currentTab=value),
@@ -450,6 +521,7 @@ class _RidePageState extends State<RidePage> {
         NavigationDestination(icon:Icon(Icons.dashboard_outlined),selectedIcon:Icon(Icons.dashboard),label:'Dashboard'),
         NavigationDestination(icon:Icon(Icons.map_outlined),selectedIcon:Icon(Icons.map),label:'Peta'),
         NavigationDestination(icon:Icon(Icons.history),label:'Riwayat'),
+        NavigationDestination(icon:Icon(Icons.tune),label:'Fitur'),
         NavigationDestination(icon:Icon(Icons.person_outline),label:'Akun'),
       ],
     ),
